@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from django.urls import reverse
 from .models import (
     Series, VODCategory, Movie, Episode, VODLogo,
@@ -9,10 +11,10 @@ from apps.m3u.serializers import M3UAccountSerializer
 
 class VODLogoSerializer(serializers.ModelSerializer):
     cache_url = serializers.SerializerMethodField()
-    movie_count = serializers.SerializerMethodField()
-    series_count = serializers.SerializerMethodField()
-    is_used = serializers.SerializerMethodField()
-    item_names = serializers.SerializerMethodField()
+    movie_count = serializers.IntegerField(read_only=True, help_text="Number of movies using this logo")
+    series_count = serializers.IntegerField(read_only=True, help_text="Number of series using this logo")
+    is_used = serializers.BooleanField(read_only=True, help_text="Whether this logo is used by any movie or series")
+    item_names = serializers.ListField(child=serializers.CharField(), read_only=True, help_text="List of movies and series using this logo (limited to 10)")
 
     class Meta:
         model = VODLogo
@@ -47,18 +49,22 @@ class VODLogoSerializer(serializers.ModelSerializer):
             )
         return reverse("api:vod:vodlogo-cache", args=[obj.id])
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_movie_count(self, obj):
         """Get the number of movies using this logo"""
         return obj.movie.count() if hasattr(obj, 'movie') else 0
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_series_count(self, obj):
         """Get the number of series using this logo"""
         return obj.series.count() if hasattr(obj, 'series') else 0
 
+    @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_used(self, obj):
         """Check if this logo is used by any movies or series"""
         return (hasattr(obj, 'movie') and obj.movie.exists()) or (hasattr(obj, 'series') and obj.series.exists())
 
+    @extend_schema_field(OpenApiTypes.STR, many=True)
     def get_item_names(self, obj):
         """Get the list of movies and series using this logo"""
         names = []
@@ -99,12 +105,13 @@ class VODCategorySerializer(serializers.ModelSerializer):
 
 class SeriesSerializer(serializers.ModelSerializer):
     logo = VODLogoSerializer(read_only=True)
-    episode_count = serializers.SerializerMethodField()
+    episode_count = serializers.IntegerField(read_only=True, help_text="Number of episodes in the series")
 
     class Meta:
         model = Series
         fields = '__all__'
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_episode_count(self, obj):
         return obj.episodes.count()
 
@@ -294,11 +301,12 @@ class EnhancedSeriesSerializer(serializers.ModelSerializer):
     """Enhanced serializer for series with provider information"""
     logo = VODLogoSerializer(read_only=True)
     providers = M3USeriesRelationSerializer(source='m3u_relations', many=True, read_only=True)
-    episode_count = serializers.SerializerMethodField()
+    episode_count = serializers.IntegerField(read_only=True, help_text="Number of episodes in the series")
 
     class Meta:
         model = Series
         fields = '__all__'
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_episode_count(self, obj):
         return obj.episodes.count()
