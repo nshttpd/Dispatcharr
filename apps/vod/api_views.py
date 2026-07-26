@@ -32,8 +32,6 @@ from .serializers import (
     M3USeriesRelationSerializer,
     M3UEpisodeRelationSerializer
 )
-from drf_spectacular.utils import extend_schema
-from drf_spectacular.types import OpenApiTypes
 from .tasks import refresh_series_episodes, refresh_movie_advanced_data
 from django.utils import timezone
 from datetime import timedelta
@@ -800,27 +798,6 @@ class VODLogoViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'url']
     ordering_fields = ['name', 'id']
     ordering = ['name']
-
-    @extend_schema(
-        responses={
-            200: {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer"},
-                    "name": {"type": "string"},
-                    "url": {"type": "string"},
-                    "cache_url": {"type": "string"},
-                    "movie_count": {"type": "integer"},
-                    "series_count": {"type": "integer"},
-                    "is_used": {"type": "boolean"},
-                    "item_names": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    },
-                }
-            }
-        }
-    )
 
     def get_permissions(self):
         try:
