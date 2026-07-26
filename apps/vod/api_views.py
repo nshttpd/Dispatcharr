@@ -44,6 +44,7 @@ from django.utils import timezone
 from datetime import timedelta
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
+from rest_framework.utils.urls import replace_query_param, remove_query_param
 
 logger = logging.getLogger(__name__)
 
@@ -207,45 +208,70 @@ class MovieViewSet(viewsets.ReadOnlyModelViewSet):
         info = custom_props.get('detailed_info', {})
         movie_data = custom_props.get('movie_data', {})
 
-        # Build response with available data
+        # Coerce loose provider values so serializer output matches OpenAPI types.
+        raw_rating = movie.rating or info.get('rating')
+        if raw_rating is None or raw_rating == '':
+            rating_value = None
+        else:
+            rating_value = str(raw_rating)
+
+        year_value = movie.year if movie.year is not None else info.get('year')
+        try:
+            year_value = int(year_value) if year_value not in (None, '') else None
+        except (TypeError, ValueError):
+            year_value = movie.year
+
+        duration_value = movie.duration_secs if movie.duration_secs is not None else info.get('duration_secs')
+        try:
+            duration_value = int(duration_value) if duration_value not in (None, '') else None
+        except (TypeError, ValueError):
+            duration_value = movie.duration_secs
+
+        try:
+            bitrate_value = int(info.get('bitrate', 0) or 0)
+        except (TypeError, ValueError):
+            bitrate_value = 0
+
+        # Build response with available data, then coerce through the serializer so
+        # runtime JSON types match the OpenAPI schema used by generated clients.
         response_data = {
             'id': movie.id,
             'uuid': movie.uuid,
             'stream_id': relation.stream_id,
             'name': info.get('name', movie.name),
-            'o_name': info.get('o_name', ''),
+            'o_name': info.get('o_name', '') or '',
             'description': info.get('description', info.get('plot', movie.description)),
             'plot': info.get('plot', info.get('description', movie.description)),
-            'year': movie.year or info.get('year'),
-            'release_date': (movie.custom_properties or {}).get('release_date') or info.get('release_date') or info.get('releasedate', ''),
-            'genre': movie.genre or info.get('genre', ''),
-            'director': (movie.custom_properties or {}).get('director') or info.get('director', ''),
-            'actors': (movie.custom_properties or {}).get('actors') or info.get('actors', ''),
-            'country': (movie.custom_properties or {}).get('country') or info.get('country', ''),
-            'rating': movie.rating or info.get('rating', movie.rating or 0),
-            'tmdb_id': movie.tmdb_id or info.get('tmdb_id', ''),
-            'imdb_id': movie.imdb_id or info.get('imdb_id', ''),
-            'youtube_trailer': (movie.custom_properties or {}).get('youtube_trailer') or info.get('youtube_trailer') or info.get('trailer', ''),
-            'duration_secs': movie.duration_secs or info.get('duration_secs'),
-            'age': info.get('age', ''),
-            'backdrop_path': (movie.custom_properties or {}).get('backdrop_path') or info.get('backdrop_path', []),
-            'cover': info.get('cover_big', ''),
-            'cover_big': info.get('cover_big', ''),
-            'movie_image': movie.logo.url if movie.logo else info.get('movie_image', ''),
-            'bitrate': info.get('bitrate', 0),
-            'video': info.get('video', {}),
-            'audio': info.get('audio', {}),
-            'container_extension': movie_data.get('container_extension', 'mp4'),
-            'direct_source': movie_data.get('direct_source', ''),
-            'category_id': movie_data.get('category_id', ''),
-            'added': movie_data.get('added', ''),
+            'year': year_value,
+            'release_date': (movie.custom_properties or {}).get('release_date') or info.get('release_date') or info.get('releasedate', '') or '',
+            'genre': movie.genre or info.get('genre', '') or '',
+            'director': (movie.custom_properties or {}).get('director') or info.get('director', '') or '',
+            'actors': (movie.custom_properties or {}).get('actors') or info.get('actors', '') or '',
+            'country': (movie.custom_properties or {}).get('country') or info.get('country', '') or '',
+            'rating': rating_value,
+            'tmdb_id': movie.tmdb_id or info.get('tmdb_id') or None,
+            'imdb_id': movie.imdb_id or info.get('imdb_id') or None,
+            'youtube_trailer': (movie.custom_properties or {}).get('youtube_trailer') or info.get('youtube_trailer') or info.get('trailer', '') or '',
+            'duration_secs': duration_value,
+            'age': info.get('age', '') or '',
+            'backdrop_path': (movie.custom_properties or {}).get('backdrop_path') or info.get('backdrop_path', []) or [],
+            'cover': info.get('cover_big', '') or '',
+            'cover_big': info.get('cover_big', '') or '',
+            'movie_image': (movie.logo.url if movie.logo else info.get('movie_image', '')) or '',
+            'bitrate': bitrate_value,
+            'video': info.get('video', {}) or {},
+            'audio': info.get('audio', {}) or {},
+            'container_extension': movie_data.get('container_extension', 'mp4') or 'mp4',
+            'direct_source': movie_data.get('direct_source', '') or '',
+            'category_id': str(movie_data.get('category_id', '') or ''),
+            'added': movie_data.get('added', '') or '',
             'm3u_account': {
                 'id': relation.m3u_account.id,
                 'name': relation.m3u_account.name,
                 'account_type': relation.m3u_account.account_type
             }
         }
-        return Response(response_data)
+        return Response(MovieProviderInfoSerializer(response_data).data)
 
 class EpisodeFilter(django_filters.FilterSet):
     name = django_filters.CharFilter(lookup_expr="icontains")
@@ -559,7 +585,8 @@ class SeriesViewSet(viewsets.ReadOnlyModelViewSet):
                 response_data['episodes'] = {}
 
             logger.debug(f"Returning series info response for series {series.id}")
-            return Response(response_data)
+            # Coerce through the serializer so runtime JSON types match OpenAPI.
+            return Response(SeriesProviderInfoSerializer(response_data).data)
 
         except Exception as e:
             logger.error(f"Error fetching series info for series {pk}: {str(e)}")
@@ -834,7 +861,8 @@ class UnifiedContentViewSet(viewsets.ReadOnlyModelViewSet):
                             'is_used': True
                         }
 
-                    # Convert to the format expected by frontend
+                    # Keep datetimes as native objects; UnifiedContentItemSerializer
+                    # emits format: date-time for generated clients (e.g. time.Time).
                     formatted_item = {
                         'id': item_dict['id'],
                         'uuid': str(item_dict['uuid']),
@@ -844,8 +872,8 @@ class UnifiedContentViewSet(viewsets.ReadOnlyModelViewSet):
                         'rating': float(item_dict['rating']) if item_dict['rating'] else 0.0,
                         'genre': item_dict['genre'] or '',
                         'duration': item_dict['duration'],
-                        'created_at': item_dict['created_at'].isoformat() if item_dict['created_at'] else None,
-                        'updated_at': item_dict['updated_at'].isoformat() if item_dict['updated_at'] else None,
+                        'created_at': item_dict['created_at'],
+                        'updated_at': item_dict['updated_at'],
                         'custom_properties': item_dict['custom_properties'] or {},
                         'logo': logo_data,
                         'content_type': item_dict['content_type']
@@ -870,14 +898,30 @@ class UnifiedContentViewSet(viewsets.ReadOnlyModelViewSet):
                 cursor.execute(count_sql, count_params)
                 total_count = cursor.fetchone()[0]
 
+            # Standard DRF-style next/previous page URIs (null when absent)
+            base_url = request.build_absolute_uri()
+            if offset + page_size < total_count:
+                next_url = replace_query_param(base_url, 'page', page_number + 1)
+            else:
+                next_url = None
+
+            if page_number > 1:
+                prev_page = page_number - 1
+                if prev_page == 1:
+                    previous_url = remove_query_param(base_url, 'page')
+                else:
+                    previous_url = replace_query_param(base_url, 'page', prev_page)
+            else:
+                previous_url = None
+
             response_data = {
                 'count': total_count,
-                'next': offset + page_size < total_count,
-                'previous': page_number > 1,
+                'next': next_url,
+                'previous': previous_url,
                 'results': results
             }
 
-            return Response(response_data)
+            return Response(UnifiedContentListSerializer(response_data).data)
 
         except Exception as e:
             logger.error(f"Error in UnifiedContentViewSet.list(): {e}")
